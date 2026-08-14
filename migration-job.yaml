@@ -1,0 +1,39 @@
+# Job de migration (ADR-002, secao 2.4.d).
+#
+# POR QUE UM JOB E NÃO NO STARTUP DO CONTAINER:
+# no EKS, múltiplos pods da aplicação sobem em paralelo. Se a migration
+# rodasse no startup, várias instâncias tentariam migrar o mesmo banco
+# simultaneamente — corrida clássica que corrompe o estado do schema.
+# Este Job roda UMA vez e só então os pods da aplicação sobem.
+#
+# No Helm, usar as hooks abaixo para garantir a ordem no deploy.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: creed-backend-migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      name: creed-backend-migrate
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          command: ["alembic", "upgrade", "head"]
+          envFrom:
+            - configMapRef:
+                name: creed-backend-config
+            - secretRef:
+                name: creed-backend-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
