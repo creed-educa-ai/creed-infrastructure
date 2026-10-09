@@ -1,0 +1,70 @@
+# Produção na EC2 (ADR-0007): Caddy na frente, Keycloak atrás. N8N e back entram
+# nas próximas fases. O banco é o RDS — nenhum Postgres sobe aqui.
+#
+# Na EC2 este arquivo roda de /opt/creed/creed-infrastructure/ec2, com o
+# creed-backend clonado ao lado (/opt/creed/creed-backend) e o .env desta pasta
+# sendo um link para /opt/creed/.env. Passo a passo no README desta pasta.
+
+# Fixa o nome do projeto, que é o prefixo dos volumes (creed_caddy_data). Nome
+# novo = volume novo = certificado novo pedido ao Let's Encrypt, que emite no
+# máximo 5 iguais por semana.
+name: creed
+
+services:
+  caddy:
+    image: caddy:2.11
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Onde o certificado mora. Nunca apague.
+      - caddy_data:/data
+      - caddy_config:/config
+
+  keycloak:
+    # Mesma versão do docker-compose local do creed-backend.
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    # `start` é o modo produção. O realm só é importado se ainda não existir no
+    # banco: mudança no arquivo depois disso não chega sozinha.
+    command: start --import-realm
+    # A instância tem 2 GB. Sem teto, a JVM toma ~70% da RAM da máquina inteira;
+    # com ele, ~70% deste valor.
+    mem_limit: 1g
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=require
+      KC_DB_SCHEMA: keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      # O RDS db.t4g.micro aceita ~100 conexões, e o padrão do Keycloak (100)
+      # tomaria todas — sem sobrar para o back e o N8N.
+      KC_DB_POOL_MAX_SIZE: 10
+
+      # Atrás do Caddy, que cuida do HTTPS e repassa /auth para cá.
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: https://${PUBLIC_HOST}/auth
+      # O console de admin não passa pelo Caddy: só por túnel SSH
+      # (ssh -L 18080:localhost:8080 creed-ec2 → http://localhost:18080/auth/admin).
+      KC_HOSTNAME_ADMIN: http://localhost:18080/auth
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+      # Placeholders do realm-creed.json (README do creed-backend).
+      CREED_BACKEND_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      CREED_REALM_SSL_REQUIRED: external
+    # Só na própria máquina, para o túnel do console. A internet chega pelo Caddy.
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ../../creed-backend/docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
+
+volumes:
+  caddy_data:
+  caddy_config:
