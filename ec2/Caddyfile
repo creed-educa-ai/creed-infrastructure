@@ -1,0 +1,34 @@
+# Porta de entrada da EC2 (ADR-0007): HTTPS e divisão do tráfego por caminho.
+# PUBLIC_HOST é o Elastic IP, vindo do .env.
+
+{
+	# Quem acessa por IP não informa a qual site quer chegar (não há SNI).
+	# Isto diz ao Caddy qual certificado apresentar nesse caso.
+	default_sni {$PUBLIC_HOST}
+}
+
+{$PUBLIC_HOST} {
+	# Para IP, o Let's Encrypt só emite no perfil de ~6 dias. O Caddy renova sozinho.
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+
+	# Console e Admin API do Keycloak não saem para a internet. O console é
+	# acessado por túnel SSH, e o back fala com a Admin API pela rede interna do
+	# compose, sem passar por aqui. Vem antes do /auth/* por ser caminho mais longo.
+	handle /auth/admin* {
+		respond 404
+	}
+
+	# Páginas do realm: é aqui que abre o link do convite de primeiro acesso
+	# (ADR-0006, P-012).
+	handle /auth/* {
+		reverse_proxy keycloak:8080
+	}
+
+	handle {
+		respond "CREED ok" 200
+	}
+}
