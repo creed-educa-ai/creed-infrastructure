@@ -7,13 +7,18 @@
 	default_sni {$PUBLIC_HOST}
 }
 
-{$PUBLIC_HOST} {
-	# Para IP, o Let's Encrypt só emite no perfil de ~6 dias. O Caddy renova sozinho.
+# Para IP, o Let's Encrypt só emite no perfil de ~6 dias. O Caddy renova sozinho.
+# Os dois endereços abaixo são o mesmo IP: usam o mesmo certificado.
+(certificado_do_ip) {
 	tls {
 		issuer acme {
 			profile shortlived
 		}
 	}
+}
+
+{$PUBLIC_HOST} {
+	import certificado_do_ip
 
 	# Console e Admin API do Keycloak não saem para a internet. O console é
 	# acessado por túnel SSH, e o back fala com a Admin API pela rede interna do
@@ -31,4 +36,20 @@
 	handle {
 		respond "CREED ok" 200
 	}
+}
+
+# Editor do N8N, para o time montar os workflows (CREED-284). Porta própria e não
+# um caminho como /n8n: o editor do N8N tem problemas conhecidos dentro de caminho.
+#
+# Duas camadas: a senha compartilhada abaixo esconde a tela do N8N dos robôs que
+# varrem a internet; depois dela vem o login do próprio N8N, um usuário por pessoa.
+# O back NÃO passa por aqui: chama o N8N pela rede interna (http://n8n:5678).
+{$PUBLIC_HOST}:5679 {
+	import certificado_do_ip
+
+	basic_auth {
+		{$N8N_BASIC_AUTH_USER} {$N8N_BASIC_AUTH_HASH}
+	}
+
+	reverse_proxy n8n:5678
 }

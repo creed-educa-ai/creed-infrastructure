@@ -1,5 +1,5 @@
-# Produção na EC2 (ADR-0007): Caddy na frente, Keycloak atrás. N8N e back entram
-# nas próximas fases. O banco é o RDS — nenhum Postgres sobe aqui.
+# Produção na EC2 (ADR-0007): Caddy na frente, Keycloak e N8N atrás. O back entra
+# na próxima fase. O banco é o RDS — nenhum Postgres sobe aqui.
 #
 # Na EC2 este arquivo roda de /opt/creed/creed-infrastructure/ec2, com o
 # creed-backend clonado ao lado (/opt/creed/creed-backend) e o .env desta pasta
@@ -17,8 +17,13 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # Editor do N8N, atrás de senha (Caddyfile). Precisa da regra 5679 no
+      # security group.
+      - "5679:5679"
     environment:
       PUBLIC_HOST: ${PUBLIC_HOST}
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER}
+      N8N_BASIC_AUTH_HASH: ${N8N_BASIC_AUTH_HASH}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Onde o certificado mora. Nunca apague.
@@ -65,6 +70,51 @@ services:
     volumes:
       - ../../creed-backend/docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
 
+  n8n:
+    # Versão fixa, a mesma do docker-compose local do creed-backend. `latest`
+    # trocaria de versão sozinho a cada `pull`, sem ninguém ler o que mudou.
+    image: n8nio/n8n:2.43.4
+    restart: unless-stopped
+    mem_limit: 768m
+    environment:
+      # Workflows, usuários e credenciais ficam no RDS, no schema `n8n` — que o
+      # próprio N8N cria (o creed_app tem CREATE no banco).
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: ${POSTGRES_HOST}
+      DB_POSTGRESDB_PORT: ${POSTGRES_PORT}
+      DB_POSTGRESDB_DATABASE: ${POSTGRES_DB}
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_SCHEMA: n8n
+      # O RDS exige SSL. Criptografa sem validar a cadeia do certificado da AWS —
+      # o mesmo que o sslmode=require do Keycloak.
+      DB_POSTGRESDB_SSL_ENABLED: "true"
+      DB_POSTGRESDB_SSL_REJECT_UNAUTHORIZED: "false"
+
+      # Chave que criptografa as credenciais salvas nos workflows (chaves de LLM).
+      # Perdida, as credenciais ficam ilegíveis: guardada também no Parameter Store.
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+
+      # O editor é aberto pelo Caddy, em https://<IP>:5679.
+      N8N_PROTOCOL: https
+      N8N_HOST: ${PUBLIC_HOST}
+      N8N_EDITOR_BASE_URL: https://${PUBLIC_HOST}:5679
+      N8N_PROXY_HOPS: 1
+      # A URL de webhook que o editor mostra é a que o back usa: a da rede interna.
+      WEBHOOK_URL: http://n8n:5678/
+
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      TZ: America/Sao_Paulo
+      N8N_DIAGNOSTICS_ENABLED: "false"
+    # Só na própria máquina: plano B por túnel, se o Caddy estiver fora.
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      # Único estado fora do RDS (ADR-0007): chaves locais e arquivos do N8N.
+      # Nunca apague — e entra no backup do disco.
+      - n8n_data:/home/node/.n8n
+
 volumes:
   caddy_data:
   caddy_config:
+  n8n_data:
