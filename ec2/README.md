@@ -150,3 +150,10 @@ e abra <http://localhost:18080/auth/admin>. Na primeira vez, entre com o
   é trocar nos dois lugares, de propósito, lendo o que mudou.
 - **Mudar o `realm-creed.json` não muda o realm em produção.** O `--import-realm` só
   importa se o realm ainda não existe. Como aplicar mudança depois disso é pendência.
+- **Mudou o `Caddyfile`? Recrie o Caddy:** `docker compose up -d --force-recreate caddy`.
+  O arquivo entra no container montado, e o `git pull` troca o arquivo em vez de
+  editá-lo — o container segue lendo o antigo, e um `up -d` comum não recria nada,
+  porque o compose do Caddy não mudou. Aconteceu em 2026-10-20: a rota `/api` não
+  existia, e o `/api/...` respondia o `CREED ok` com status 200, parecendo
+  funcionar. Para conferir, olhe o **conteúdo** da resposta, não só o código. O
+  certificado fica no volume: recriar não pede um novo.
