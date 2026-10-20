@@ -1,5 +1,5 @@
-# Produção na EC2 (ADR-0007): Caddy na frente, Keycloak e N8N atrás. O back entra
-# na próxima fase. O banco é o RDS — nenhum Postgres sobe aqui.
+# Produção na EC2 (ADR-0007): Caddy na frente; back, Keycloak e N8N atrás. O banco
+# é o RDS — nenhum Postgres sobe aqui.
 #
 # Na EC2 este arquivo roda de /opt/creed/creed-infrastructure/ec2, com o
 # creed-backend clonado ao lado (/opt/creed/creed-backend) e o .env desta pasta
@@ -113,6 +113,32 @@ services:
       # Único estado fora do RDS (ADR-0007): chaves locais e arquivos do N8N.
       # Nunca apague — e entra no backup do disco.
       - n8n_data:/home/node/.n8n
+
+  back:
+    # Imagem gerada pelo workflow imagem.yml do creed-backend a cada push na main.
+    # BACK_TAG é o commit que está no ar: quem grava no .env é o deploy.sh, e só
+    # depois de a migration passar. Não edite à mão.
+    image: ghcr.io/creed-educa-ai/creed-backend:${BACK_TAG:-main}
+    restart: unless-stopped
+    mem_limit: 384m
+    environment:
+      ENVIRONMENT: production
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # O back fala com o Keycloak pela rede interna; o token sai com o endereço
+      # público, e é por ele que o `iss` é conferido (CREED-283).
+      KEYCLOAK_SERVER_URL: http://keycloak:8080/auth
+      KEYCLOAK_PUBLIC_URL: https://${PUBLIC_HOST}/auth
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      # Domínio do front no Amplify, quando existir. Vazio = nenhum navegador de
+      # outro endereço consegue chamar a API.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # A integração com o N8N ainda não existe no back: N8N_WEBHOOK_URL
+      # (http://n8n:5678/webhook/...) e N8N_CALLBACK_SECRET entram com ela.
+    # Sem porta publicada: a internet chega pelo Caddy, em /api.
 
 volumes:
   caddy_data:

@@ -33,6 +33,11 @@
 		reverse_proxy keycloak:8080
 	}
 
+	# API do back. O caminho chega inteiro (/api/v1/...), que é como o back espera.
+	handle /api/* {
+		reverse_proxy back:8000
+	}
+
 	handle {
 		respond "CREED ok" 200
 	}
