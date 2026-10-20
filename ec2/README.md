@@ -41,7 +41,8 @@ novos se geram sem passar pelo histórico do terminal:
 
 ```bash
 echo "KEYCLOAK_CLIENT_SECRET=$(openssl rand -hex 32)" >> /opt/creed/.env
-echo "KEYCLOAK_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> /opt/creed/.env
+echo "KC_BOOTSTRAP_ADMIN_USERNAME=admin-temporario" >> /opt/creed/.env
+echo "KC_BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -hex 16)" >> /opt/creed/.env
 echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> /opt/creed/.env
 ```
 
@@ -135,7 +136,10 @@ interna — é a que o back usa. Ela não abre do seu navegador, e é assim de p
 ssh -L 18080:localhost:8080 creed-ec2
 ```
 
-e abra <http://localhost:18080/auth/admin>. Usuário e senha: `KEYCLOAK_ADMIN_*` do `.env`.
+e abra <http://localhost:18080/auth/admin>. Na primeira vez, entre com o
+`KC_BOOTSTRAP_ADMIN_*` do `.env`, crie no realm `master` um admin **por pessoa**
+(papel `admin`), entre com ele, apague o temporário e **remova as duas linhas
+`KC_BOOTSTRAP_ADMIN_*` do `.env`**.
 
 ## Cuidados
 

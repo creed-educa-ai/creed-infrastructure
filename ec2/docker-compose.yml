@@ -58,8 +58,12 @@ services:
       # O console de admin não passa pelo Caddy: só por túnel SSH
       # (ssh -L 18080:localhost:8080 creed-ec2 → http://localhost:18080/auth/admin).
       KC_HOSTNAME_ADMIN: http://localhost:18080/auth
-      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN_USERNAME}
-      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      # Admin TEMPORÁRIO, só para a primeira subida. Sem valor de propósito: o
+      # compose repassa a variável do .env se ela existir e a omite se não existir.
+      # Com `${...}`, ela chegaria VAZIA depois de apagada do .env, e o Keycloak 26
+      # recusa subir com nome de admin sem senha (ficou em loop em 2026-10-15).
+      KC_BOOTSTRAP_ADMIN_USERNAME:
+      KC_BOOTSTRAP_ADMIN_PASSWORD:
 
       # Placeholders do realm-creed.json (README do creed-backend).
       CREED_BACKEND_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
