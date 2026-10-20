@@ -1,14 +1,15 @@
 # EC2 — produção (ADR-0007)
 
-Caddy (HTTPS e roteamento) na frente do Keycloak e do N8N, num `docker compose` só.
-O banco é o RDS. O back entra na próxima fase.
+Caddy (HTTPS e roteamento) na frente do back, do Keycloak e do N8N, num `docker
+compose` só. O banco é o RDS.
 
 | Endereço público | Vai para |
 |---|---|
 | `https://<IP>/auth/admin*` | **404** — console só por túnel |
 | `https://<IP>/auth/*` | Keycloak (páginas do realm, link do convite) |
+| `https://<IP>/api/*` | back (FastAPI) |
 | `https://<IP>:5679` | editor do N8N, atrás de senha compartilhada + login do N8N |
-| qualquer outro | `CREED ok` (até o back entrar) |
+| qualquer outro | `CREED ok` |
 
 O back fala com o Keycloak e com o N8N pela rede interna do compose — nada disso passa
 pelos endereços acima.
@@ -62,6 +63,41 @@ Conferir, de fora da EC2:
 curl https://<IP>/auth/realms/creed                 # JSON do realm
 curl -o /dev/null -w '%{http_code}\n' https://<IP>/auth/admin/   # 404
 ```
+
+## Back e deploy
+
+O back **não sobe com `git pull`**: a imagem vem pronta do GitHub. Produção publica a
+partir da `main` do `creed-backend` (CREED-285):
+
+```
+merge na main ──▶ workflow imagem.yml gera ghcr.io/creed-educa-ai/creed-backend:<commit>
+              ──▶ (Session Manager) a EC2 roda: ./deploy.sh <commit>
+```
+
+O [`deploy.sh`](deploy.sh), na ordem — e ela importa (princípio inegociável #2):
+
+1. baixa a imagem do commit;
+2. roda `alembic upgrade head` num **container descartável** dessa imagem;
+3. só se a migration passar, recria o container do back;
+4. espera o `/health` responder e **só então** grava o commit em `BACK_TAG`, no `.env`.
+
+Migration falhou → o script para no passo 2, e o back antigo segue no ar com o banco
+como estava. Back não respondeu → o script mostra o log e para, **sem voltar sozinho
+à versão anterior**: a migration já rodou, e a imagem antiga pode não entender o
+banco novo. Quem decide é uma pessoa.
+
+À mão, de dentro da EC2 (como `ec2-user`), funciona igual:
+
+```bash
+cd /opt/creed/creed-infrastructure/ec2
+./deploy.sh <commit>
+grep BACK_TAG /opt/creed/.env      # qual commit está no ar
+```
+
+O pacote da imagem no GHCR precisa estar **público**, para a EC2 baixar sem senha.
+
+Mudança **neste** compose (serviço novo, variável nova) não chega com o deploy do
+back: é `git pull` neste clone e `docker compose up -d`, à mão, com alguém olhando.
 
 ## Editor do N8N
 
