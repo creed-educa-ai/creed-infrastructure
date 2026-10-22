@@ -1,3 +1,19 @@
+# ════════════════════════════════════════════════════════════════════
+# APOSENTADO em 2026-09-12 pelo ADR-0007 — NADA CONSOME ESTE ARQUIVO.
+#
+# O projeto saiu de EKS para Amplify (front) + uma EC2 (back, N8N e
+# Keycloak em containers). Não há cluster, não há Helm, não há pods.
+#
+# A REGRA CONTINUA VALENDO: migration nunca roda no startup do
+# container. O mecanismo é que mudou — hoje é um passo do pipeline, que
+# sobe um container descartável com `alembic upgrade head` e só recria
+# o container do back se ele terminar com codigo 0.
+#
+# Mantido versionado como referência: se um dia aparecer dono de infra
+# e necessidade de cluster, este manifesto é o ponto de partida e o
+# ADR-0007 explica o que custaria voltar.
+# ════════════════════════════════════════════════════════════════════
+#
 # Job de migration (ADR-002, secao 2.4.d).
 #
 # POR QUE UM JOB E NÃO NO STARTUP DO CONTAINER:
