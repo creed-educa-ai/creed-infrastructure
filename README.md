@@ -1,52 +1,38 @@
 # Creed Infrastructure — CREED.ai Educa
 
-Infraestrutura em **AWS Amplify + EC2** ([ADR-0007](https://github.com/creed-educa-ai/creed-ai-context/blob/main/decisoes/adrs/0007-amplify-e-ec2-no-lugar-do-eks.md)).
-Responsabilidade dos donos de infra; o restante do time interage com o pipeline, não
-com a instância.
-
-> **Este repo descrevia EKS até 2026-09-12.** O desenho de cluster foi aposentado: não
-> havia dono de infra e a pendência #1 do ADR-001 — o que a agência provê de trilhos de
-> EKS — nunca foi respondida. O `migration-job.yaml` continua versionado como
-> referência, mas **nada o consome**.
+Produção do CREED.ai Educa ([ADR-0007](https://github.com/creed-educa-ai/creed-ai-context/blob/main/decisoes/adrs/0007-amplify-e-ec2-no-lugar-do-eks.md),
+que substituiu o EKS do ADR-001): front no **Amplify**, back, Keycloak e N8N numa
+**EC2 única** com Docker Compose, banco no **RDS**.
 
 ## Componentes
 
 | Componente | Onde roda | Observação |
 |---|---|---|
-| Front-end | **AWS Amplify** | build estático; CDN, TLS e preview por PR gerenciados |
-| Back-end | Container na EC2 (Uvicorn) | mesmo `docker-compose` do ambiente local |
-| Keycloak | Container na EC2 | schema `keycloak` no RDS |
-| N8N | Container na EC2 + volume | self-hosted por orçamento (ADR-001, 2.1) |
-| PostgreSQL | **RDS gerenciado** | fora da instância — nunca banco no disco da EC2 |
-| Migrations | **Passo do pipeline** | container descartável — nunca no startup |
+| Front-end | **Amplify** | Build do `creed-frontend` a cada push na branch ligada; reescrita de SPA e `VITE_API_BASE_URL` configuradas no console |
+| Back-end | Container na EC2 | Imagem vinda do GHCR, publicada pelo `deploy.sh` (CREED-285) |
+| Keycloak | Container na EC2 | Estado no RDS (schema `keycloak`) |
+| N8N | Container na EC2 + volume | Estado no RDS (schema `n8n`) **e** no volume — o único fora do RDS |
+| Caddy | Container na EC2 | HTTPS (certificado do IP) e divisão do tráfego por caminho |
+| PostgreSQL | **RDS** | Um schema por componente; nunca acessível pela internet |
 
-Uma EC2 só, três containers, um `docker-compose` — o mesmo que roda na máquina de quem
-desenvolve. Local e ambiente real têm a mesma topologia de propósito.
+## Onde está cada coisa
 
-## Ordem de deploy
+- [`ec2/`](ec2/) — compose de produção, Caddyfile, `deploy.sh` e o
+  [README](ec2/README.md) de operação: subir, atualizar, deploy, consoles, cuidados.
+- [`migration-job.yaml`](migration-job.yaml) — **aposentado**. Era o Job de migration
+  do EKS; quem roda a migration agora é o `deploy.sh`, num container descartável,
+  antes de recriar o back. O princípio é o mesmo: migration nunca no startup.
 
-```
-1. Pipeline sobe um container descartável: alembic upgrade head
-2. Esse container termina com código 0
-3. Só então o container do back é recriado na imagem nova
-```
+## Ordem de deploy do back
 
-Migration falhou → o passo 3 não acontece, e a instância **continua servindo a versão
-anterior**. A aplicação nunca sobe contra um schema inconsistente.
+1. A imagem do commit é baixada.
+2. `alembic upgrade head` roda num container descartável dessa imagem.
+3. Só se a migration passar, o container do back é recriado.
 
-O front não entra nesse fluxo: o Amplify publica o build por conta própria, no push.
-
-## Estado fora do RDS
-
-O **volume do N8N** é o único dado que não vive no RDS. É o que precisa de backup de
-disco, e o que não volta sozinho se a instância morrer — back e Keycloak voltam sem
-perda.
+Se a migration falhar, o deploy para — o back antigo segue no ar, com o banco como
+estava. Detalhe em [`ec2/README.md`](ec2/README.md#back-e-deploy).
 
 ## Pendências
 
-- [ ] Definir os 1–2 donos de infra (pendência herdada do ADR-001).
-- [ ] Onde roda o passo de migration no pipeline, e com qual credencial de RDS.
-- [ ] Backup do volume do N8N.
-- [ ] Domínio e TLS nas duas pontas — Amplify e EC2. É o que fecha o CORS e o hostname
-      do realm do Keycloak.
-- [ ] Tamanho da instância: três containers mais o overhead de JVM do Keycloak.
+As de arquitetura estão no ADR-0007. As de operação estão no
+[`ec2/README.md`](ec2/README.md#pendências-de-operação).
