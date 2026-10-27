@@ -27,6 +27,13 @@
 		respond 404
 	}
 
+	# O realm master guarda os admins do próprio Keycloak. Aberto, ele aceita
+	# tentativa de senha desses admins vinda de qualquer lugar. Ninguém de fora
+	# precisa dele: o login do console passa pelo túnel, direto na porta 8080.
+	handle /auth/realms/master* {
+		respond 404
+	}
+
 	# Páginas do realm: é aqui que abre o link do convite de primeiro acesso
 	# (ADR-0006, P-012).
 	handle /auth/* {
