@@ -17,7 +17,14 @@ set -euo pipefail
 
 COMMIT="${1:?uso: deploy.sh <commit da imagem>}"
 ENV_FILE="${ENV_FILE:-/opt/creed/.env}"
+LOCK_FILE="${LOCK_FILE:-/opt/creed/deploy.lock}"
 cd "$(dirname "$0")"
+
+# Um deploy por vez, venha de onde vier: do workflow, de um comando que sobreviveu
+# a um workflow cancelado ou de alguém rodando à mão. Dois deploys juntos rodariam
+# duas migrations no mesmo banco. A trava solta sozinha quando o script termina.
+exec 9>"$LOCK_FILE"
+flock -n 9 || { echo "!!! outro deploy em andamento ($LOCK_FILE)" >&2; exit 1; }
 
 # Até o fim, o compose usa a imagem nova só nestes comandos. O .env só muda no
 # final, quando ela já estiver de pé.
