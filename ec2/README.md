@@ -6,6 +6,7 @@ compose` só. O banco é o RDS.
 | Endereço público | Vai para |
 |---|---|
 | `https://<IP>/auth/admin*` | **404** — console só por túnel |
+| `https://<IP>/auth/realms/master*` | **404** — o login dos admins do Keycloak também só por túnel |
 | `https://<IP>/auth/*` | Keycloak (páginas do realm, link do convite) |
 | `https://<IP>/api/*` | back (FastAPI) |
 | `https://<IP>:5679` | editor do N8N, atrás de senha compartilhada + login do N8N |
@@ -141,6 +142,50 @@ e abra <http://localhost:18080/auth/admin>. Na primeira vez, entre com o
 (papel `admin`), entre com ele, apague o temporário e **remova as duas linhas
 `KC_BOOTSTRAP_ADMIN_*` do `.env`**.
 
+O túnel vai direto à porta 8080, sem passar pelo Caddy — por isso o bloqueio de
+`/auth/realms/master*` não atrapalha o login do console.
+
+**Proteção contra força bruta**, nos dois realms (*Realm settings → Security
+defenses → Brute force detection*, modo *Lockout temporarily*). No `creed` ela já
+vem do `realm-creed.json` para quem importar o realm do zero; na produção, que
+importou antes, foi ligada à mão. No `master`, que não vem de arquivo, sempre à mão.
+
+## Conta na plataforma (enquanto não há cadastro pelo site)
+
+O back ainda não cria usuário no Keycloak (o `POST /users` recebe um `keycloak_id`
+pronto) e o front não tem tela de admin. Até isso existir, cada conta nasce à mão,
+em duas partes:
+
+1. **Keycloak**, pelo console, no realm `creed`: *Users → Create new user* com e-mail
+   como username, *Email verified* ligado e nenhuma ação obrigatória; em
+   *Credentials*, senha com **Temporary desligado** (ligado, o login responde
+   "Account is not fully set up", que na tela parece senha errada); em *Role
+   mapping*, o papel; em *Details*, copie o **ID**.
+2. **Banco**, pelo DBeaver com túnel SSH até a EC2 (host do RDS, usuário
+   `creed_app`). Um comando só, para não sobrar linha pela metade:
+
+```sql
+WITH p AS (
+  INSERT INTO participants (id, name, status)
+  VALUES (gen_random_uuid(), '<nome>', 'ACTIVE')
+  RETURNING id
+), l AS (
+  INSERT INTO links (id, participant_id, organization_id, type, role)
+  SELECT gen_random_uuid(), p.id, '<organização>', 'EMPREGO', '<ADMIN|GESTOR|RESPONDENTE>'
+  FROM p
+  RETURNING id
+)
+INSERT INTO "user" (id, keycloak_id, name, email, status, link_id)
+SELECT gen_random_uuid(), '<ID do Keycloak>', '<nome>', '<e-mail em minúsculas>', 'ACTIVE', l.id
+FROM l;
+```
+
+- O papel do vínculo e o do Keycloak têm que ser **o mesmo**.
+- Enums vão em maiúsculas: o banco guarda o **nome** do enum, não o valor da API.
+- Enquanto a tabela `organizations` não tiver migration, a organização é a
+  provisória `00000000-0000-0000-0000-000000000001` — a mesma do seed local. O login
+  funciona; telas que leem organização, não.
+
 ## Cuidados
 
 - **Nunca apague os volumes** (nada de `docker compose down -v`). O `creed_caddy_data`
@@ -157,3 +202,19 @@ e abra <http://localhost:18080/auth/admin>. Na primeira vez, entre com o
   existia, e o `/api/...` respondia o `CREED ok` com status 200, parecendo
   funcionar. Para conferir, olhe o **conteúdo** da resposta, não só o código. O
   certificado fica no volume: recriar não pede um novo.
+
+## Pendências de operação
+
+- [ ] **Backup do disco da EC2** — o `creed_n8n_data` é o único estado fora do RDS.
+      Política do *Data Lifecycle Manager* tirando snapshot diário do volume.
+- [ ] **Conferir os backups automáticos do RDS** — retenção e janela.
+- [ ] **Alertas** — *AWS Budget* avisando antes de os créditos acabarem, e alarme do
+      CloudWatch no *status check* da EC2, com recuperação automática.
+- [ ] **Fechar a porta 22** — trocar os túneis (console do Keycloak, DBeaver) pelo
+      *port forwarding* do Session Manager. Fecha só depois que funcionar para quem usa.
+- [ ] **Branch `main` no Amplify** — quando houver release, com as mesmas variáveis
+      e a mesma reescrita da `dev`.
+- [ ] **E-mail (SES) e LLM da esteira** — decisões antes de configuração: ver
+      ADR-0006 e, para o LLM, um ADR que ainda não existe.
+- [ ] **Limpeza no fim do semestre** — snapshots, volumes e o Elastic IP, que é
+      cobrado quando fica desassociado.
