@@ -150,8 +150,21 @@ e abra <http://localhost:18080/auth/admin>. Na primeira vez, entre com o
 (papel `admin`), entre com ele, apague o temporário e **remova as duas linhas
 `KC_BOOTSTRAP_ADMIN_*` do `.env`**.
 
-O túnel vai direto à porta 8080, sem passar pelo Caddy — por isso o bloqueio de
-`/auth/realms/master*` não atrapalha o login do console.
+**O realm `master` tem *Frontend URL* próprio: `http://localhost:18080/auth`.** A página
+do console vem pelo túnel, mas o login dele é montado com o endereço público
+(`KC_HOSTNAME`), e o Caddy responde 404 para `/auth/realms/master*`. Sem o *Frontend
+URL*, o console abre em "somethingWentWrong" (aconteceu em 2026-10-27). Num Keycloak
+novo, aplique **antes** de abrir o console, com o admin temporário:
+
+```bash
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://localhost:8080/auth --realm master --user <admin>
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh update realms/master \
+  -s 'attributes.frontendUrl=http://localhost:18080/auth'
+```
+
+O `kcadm.sh` fala direto com a porta 8080, sem passar pelo Caddy. Por isso o túnel
+precisa ser sempre na porta local **18080**.
 
 **Proteção contra força bruta**, nos dois realms (*Realm settings → Security
 defenses → Brute force detection*, modo *Lockout temporarily*). No `creed` ela já

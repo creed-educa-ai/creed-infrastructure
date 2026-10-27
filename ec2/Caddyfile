@@ -29,7 +29,8 @@
 
 	# O realm master guarda os admins do próprio Keycloak. Aberto, ele aceita
 	# tentativa de senha desses admins vinda de qualquer lugar. Ninguém de fora
-	# precisa dele: o login do console passa pelo túnel, direto na porta 8080.
+	# precisa dele: o master tem Frontend URL http://localhost:18080/auth, então o
+	# login do console vai pelo túnel. Sem isso, o console quebra (ver README).
 	handle /auth/realms/master* {
 		respond 404
 	}
