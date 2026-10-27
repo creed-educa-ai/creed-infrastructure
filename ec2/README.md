@@ -87,6 +87,14 @@ como estava. Back não respondeu → o script mostra o log e para, **sem voltar 
 à versão anterior**: a migration já rodou, e a imagem antiga pode não entender o
 banco novo. Quem decide é uma pessoa.
 
+**Um deploy por vez.** O script trava o `/opt/creed/deploy.lock` (`flock`) antes de
+tudo: um segundo deploy, do workflow ou à mão, sai na hora com "outro deploy em
+andamento", em vez de rodar uma segunda migration junto com a primeira.
+
+**Sem `BACK_TAG` no `.env`, o back não sobe** — de propósito. A imagem reserva do
+compose é a tag `rode-o-deploy-sh`, que não existe: o erro de pull já diz o que
+fazer. A `:main` não serve de reserva porque muda antes de a migration rodar.
+
 À mão, de dentro da EC2 (como `ec2-user`), funciona igual:
 
 ```bash

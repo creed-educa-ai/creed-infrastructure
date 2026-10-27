@@ -122,7 +122,10 @@ services:
     # Imagem gerada pelo workflow imagem.yml do creed-backend a cada push na main.
     # BACK_TAG é o commit que está no ar: quem grava no .env é o deploy.sh, e só
     # depois de a migration passar. Não edite à mão.
-    image: ghcr.io/creed-educa-ai/creed-backend:${BACK_TAG:-main}
+    # Sem BACK_TAG, a tag reserva não existe de propósito: o pull falha com o
+    # próprio nome dizendo o que fazer, em vez de subir uma imagem (como a :main)
+    # que pode nunca ter passado pela migration.
+    image: ghcr.io/creed-educa-ai/creed-backend:${BACK_TAG:-rode-o-deploy-sh}
     restart: unless-stopped
     mem_limit: 384m
     environment:
