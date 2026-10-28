@@ -37,8 +37,8 @@ services:
     # `start` é o modo produção. O realm só é importado se ainda não existir no
     # banco: mudança no arquivo depois disso não chega sozinha.
     command: start --import-realm
-    # A instância tem 2 GB. Sem teto, a JVM toma ~70% da RAM da máquina inteira;
-    # com ele, ~70% deste valor.
+    # Sem teto, a JVM toma ~70% da RAM da máquina inteira; com ele, ~70% deste
+    # valor. A instância tem 4 GB (t4g.medium, desde 2026-10-28).
     mem_limit: 1g
     environment:
       KC_DB: postgres
@@ -79,8 +79,16 @@ services:
     # trocaria de versão sozinho a cada `pull`, sem ninguém ler o que mudou.
     image: n8nio/n8n:2.43.4
     restart: unless-stopped
-    mem_limit: 768m
+    # Em 2026-10-28 o N8N travou com "JavaScript heap out of memory" com 768m: o
+    # Node limita o heap a ~metade do container (408 MB), e o processo principal
+    # já usa ~350 MB parado. O container tem dois processos Node (o principal e
+    # o task runner, ~120 MB), e os dois contam neste limite. Por isso o heap é
+    # fixado à mão (NODE_OPTIONS) e o limite deixa ~500 MB para o resto.
+    # Registro completo no diário de campo, 2026-10-28.
+    mem_limit: 1536m
     environment:
+      NODE_OPTIONS: --max-old-space-size=1024
+
       # Workflows, usuários e credenciais ficam no RDS, no schema `n8n` — que o
       # próprio N8N cria (o creed_app tem CREATE no banco).
       DB_TYPE: postgresdb
