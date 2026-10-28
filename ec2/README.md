@@ -9,6 +9,7 @@ compose` só. O banco é o RDS.
 | `https://<IP>/auth/realms/master*` | **404** — o login dos admins do Keycloak também só por túnel |
 | `https://<IP>/auth/*` | Keycloak (páginas do realm, link do convite) |
 | `https://<IP>/api/*` | back (FastAPI) |
+| `https://<IP>:5679/mcp-server/*`, `/mcp-oauth/*`, `/.well-known/oauth-*` | servidor MCP do N8N, **sem** a senha compartilhada — protegido pelo token do N8N |
 | `https://<IP>:5679` | editor do N8N, atrás de senha compartilhada + login do N8N |
 | qualquer outro | `CREED ok` |
 
@@ -135,6 +136,21 @@ mostra o link do convite para copiar e mandar.
 
 **Plano B, se o Caddy estiver fora:** `ssh -L 15678:localhost:5678 creed-ec2` e
 <http://localhost:15678>.
+
+**MCP (ligar o Claude aos workflows):** o servidor MCP do N8N fica **fora** da senha
+compartilhada. Não há como passar pelas duas: a senha do Caddy usa `Authorization:
+Basic`, e o MCP manda o token do N8N no mesmo cabeçalho (`Bearer`). Quem protege
+esses caminhos é o próprio N8N — token por pessoa, limite de tentativas por IP e 404
+enquanto o MCP estiver desligado. Para usar:
+
+1. No editor, ligue o MCP nas configurações do N8N e gere o seu token. Libere, em cada
+   workflow, o acesso por MCP — workflow não liberado fica invisível para o Claude.
+2. Conecte com a URL `https://<IP>:5679/mcp-server/http`: no Claude Code, com o token
+   no cabeçalho `Authorization: Bearer <token>`; no claude.ai, como conector, pelo
+   login OAuth (a tela de consentimento é do editor e pede a senha compartilhada).
+
+Os caminhos liberados foram conferidos no N8N 2.43.4. Ao atualizar o N8N, confira se
+continuam os mesmos.
 
 **Webhooks:** a URL que o editor mostra (`http://n8n:5678/webhook/...`) é a da rede
 interna — é a que o back usa. Ela não abre do seu navegador, e é assim de propósito.
