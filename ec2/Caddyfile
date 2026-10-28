@@ -29,7 +29,8 @@
 
 	# O realm master guarda os admins do próprio Keycloak. Aberto, ele aceita
 	# tentativa de senha desses admins vinda de qualquer lugar. Ninguém de fora
-	# precisa dele: o login do console passa pelo túnel, direto na porta 8080.
+	# precisa dele: o master tem Frontend URL http://localhost:18080/auth, então o
+	# login do console vai pelo túnel. Sem isso, o console quebra (ver README).
 	handle /auth/realms/master* {
 		respond 404
 	}
@@ -59,9 +60,24 @@
 {$PUBLIC_HOST}:5679 {
 	import certificado_do_ip
 
-	basic_auth {
-		{$N8N_BASIC_AUTH_USER} {$N8N_BASIC_AUTH_HASH}
+	# Servidor MCP do N8N, para ligar o Claude aos workflows. Fica fora da senha
+	# compartilhada porque as duas usam o mesmo cabeçalho Authorization: o MCP
+	# manda o token do N8N (Bearer), e a senha do Caddy exige Basic. O N8N
+	# protege estes caminhos sozinho: token por pessoa, limite de tentativas por
+	# IP, e 404 enquanto o MCP estiver desligado nas configurações.
+	# /mcp-oauth e /.well-known/oauth-* são o login por OAuth do conector do
+	# claude.ai. A tela de consentimento, no meio desse login, é do editor e
+	# continua atrás da senha. Caminhos conferidos no N8N 2.43.4.
+	@mcp path /mcp-server/* /mcp-oauth/* /.well-known/oauth-*
+	handle @mcp {
+		reverse_proxy n8n:5678
 	}
 
-	reverse_proxy n8n:5678
+	handle {
+		basic_auth {
+			{$N8N_BASIC_AUTH_USER} {$N8N_BASIC_AUTH_HASH}
+		}
+
+		reverse_proxy n8n:5678
+	}
 }

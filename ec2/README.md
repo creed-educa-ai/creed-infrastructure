@@ -9,6 +9,7 @@ compose` só. O banco é o RDS.
 | `https://<IP>/auth/realms/master*` | **404** — o login dos admins do Keycloak também só por túnel |
 | `https://<IP>/auth/*` | Keycloak (páginas do realm, link do convite) |
 | `https://<IP>/api/*` | back (FastAPI) |
+| `https://<IP>:5679/mcp-server/*`, `/mcp-oauth/*`, `/.well-known/oauth-*` | servidor MCP do N8N, **sem** a senha compartilhada — protegido pelo token do N8N |
 | `https://<IP>:5679` | editor do N8N, atrás de senha compartilhada + login do N8N |
 | qualquer outro | `CREED ok` |
 
@@ -136,6 +137,21 @@ mostra o link do convite para copiar e mandar.
 **Plano B, se o Caddy estiver fora:** `ssh -L 15678:localhost:5678 creed-ec2` e
 <http://localhost:15678>.
 
+**MCP (ligar o Claude aos workflows):** o servidor MCP do N8N fica **fora** da senha
+compartilhada. Não há como passar pelas duas: a senha do Caddy usa `Authorization:
+Basic`, e o MCP manda o token do N8N no mesmo cabeçalho (`Bearer`). Quem protege
+esses caminhos é o próprio N8N — token por pessoa, limite de tentativas por IP e 404
+enquanto o MCP estiver desligado. Para usar:
+
+1. No editor, ligue o MCP nas configurações do N8N e gere o seu token. Libere, em cada
+   workflow, o acesso por MCP — workflow não liberado fica invisível para o Claude.
+2. Conecte com a URL `https://<IP>:5679/mcp-server/http`: no Claude Code, com o token
+   no cabeçalho `Authorization: Bearer <token>`; no claude.ai, como conector, pelo
+   login OAuth (a tela de consentimento é do editor e pede a senha compartilhada).
+
+Os caminhos liberados foram conferidos no N8N 2.43.4. Ao atualizar o N8N, confira se
+continuam os mesmos.
+
 **Webhooks:** a URL que o editor mostra (`http://n8n:5678/webhook/...`) é a da rede
 interna — é a que o back usa. Ela não abre do seu navegador, e é assim de propósito.
 
@@ -150,8 +166,21 @@ e abra <http://localhost:18080/auth/admin>. Na primeira vez, entre com o
 (papel `admin`), entre com ele, apague o temporário e **remova as duas linhas
 `KC_BOOTSTRAP_ADMIN_*` do `.env`**.
 
-O túnel vai direto à porta 8080, sem passar pelo Caddy — por isso o bloqueio de
-`/auth/realms/master*` não atrapalha o login do console.
+**O realm `master` tem *Frontend URL* próprio: `http://localhost:18080/auth`.** A página
+do console vem pelo túnel, mas o login dele é montado com o endereço público
+(`KC_HOSTNAME`), e o Caddy responde 404 para `/auth/realms/master*`. Sem o *Frontend
+URL*, o console abre em "somethingWentWrong" (aconteceu em 2026-10-27). Num Keycloak
+novo, aplique **antes** de abrir o console, com o admin temporário:
+
+```bash
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://localhost:8080/auth --realm master --user <admin>
+docker compose exec keycloak /opt/keycloak/bin/kcadm.sh update realms/master \
+  -s 'attributes.frontendUrl=http://localhost:18080/auth'
+```
+
+O `kcadm.sh` fala direto com a porta 8080, sem passar pelo Caddy. Por isso o túnel
+precisa ser sempre na porta local **18080**.
 
 **Proteção contra força bruta**, nos dois realms (*Realm settings → Security
 defenses → Brute force detection*, modo *Lockout temporarily*). No `creed` ela já
