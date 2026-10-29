@@ -50,7 +50,8 @@ echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> /opt/creed/.env
 
 Todo segredo novo vai **também** para o Parameter Store, em `/creed/prod/<VARIÁVEL>`
 (ver `creed-ai-context/context/infraestrutura.md`). O `N8N_ENCRYPTION_KEY` é o que mais
-importa: perdido, as credenciais salvas no N8N ficam ilegíveis.
+importa: perdido, as credenciais salvas no N8N ficam ilegíveis. A exceção são as
+credenciais do Gmail ([E-mail (SMTP)](#e-mail-smtp)).
 
 ## Subir / atualizar
 
@@ -187,6 +188,100 @@ defenses → Brute force detection*, modo *Lockout temporarily*). No `creed` ela
 vem do `realm-creed.json` para quem importar o realm do zero; na produção, que
 importou antes, foi ligada à mão. No `master`, que não vem de arquivo, sempre à mão.
 
+## E-mail (SMTP)
+
+O Keycloak manda o convite de primeiro acesso e a redefinição de senha pelo **SMTP do
+Gmail do projeto** (adendo de 2026-10-27 do ADR-0006). O back não fala SMTP: ele só
+pede o envio ao Keycloak.
+
+| No `/opt/creed/.env` | Valor |
+|---|---|
+| `SMTP_HOST` e `SMTP_PORT` | `smtp.gmail.com` e `587`. STARTTLS e login são fixos no compose |
+| `SMTP_USER` e `SMTP_FROM` | o Gmail do projeto, **o mesmo** nos dois: o Google reescreve qualquer outro remetente |
+| `SMTP_PASSWORD` | uma **senha de app** do Google, não a senha da conta |
+
+- **Exceção ao Parameter Store.** A conta e a senha de app ficam com o dono da conta,
+  o **Enzo** (CREED-28), e só no `/opt/creed/.env`: não seguem a regra "todo segredo
+  novo vai também para o Parameter Store" da "Primeira vez".
+- **A senha de app entra por um editor** (`vi /opt/creed/.env`), não por
+  `echo 'SMTP_PASSWORD=...' >> /opt/creed/.env`. Nos `echo` da "Primeira vez" o valor
+  sai do `openssl`; aqui ele seria digitado, e a senha ficaria no histórico do shell.
+- **O realm não relê o `.env`.** Mudou qualquer `SMTP_*`? Rode o
+  [`aplicar-ajustes.sh`](#ajustar-o-realm-depois-da-primeira-subida).
+- **Senha de app revogada.** O Google revoga as senhas de app quando a senha da conta
+  muda, e a senha de app só funciona com a verificação em duas etapas ligada. Revogada,
+  o convite e a redefinição de senha falham, e o log do Keycloak mostra
+  `535-5.7.8 Username and Password not accepted`. Para voltar: o dono da conta gera
+  outra senha de app, troca a `SMTP_PASSWORD` no `/opt/creed/.env`, e alguém roda o
+  `aplicar-ajustes.sh` de novo.
+
+## Ajustar o realm depois da primeira subida
+
+O `--import-realm` só importa o realm `creed` quando ele ainda não existe: mudança no
+`realm-creed.json` depois disso não chega sozinha. O `kc.sh import --override` não
+serve, porque apaga e recria o realm, **com os usuários**. O caminho é o
+[`realm/aplicar-ajustes.sh`](realm/aplicar-ajustes.sh), que aplica pelo `kcadm.sh`, sem
+reimportar, estes blocos do arquivo:
+
+| Bloco do `realm-creed.json` | Para quê |
+|---|---|
+| `internationalizationEnabled`, `supportedLocales`, `defaultLocale` | páginas e e-mail em português |
+| `passwordPolicy` | senha de 8 caracteres ou mais |
+| `smtpServer` | o SMTP do Gmail, com os valores do `.env` |
+| `redirectUris` e `webOrigins` do client `creed-backend` | o link "voltar" do convite, para a `FRONTEND_URL` |
+| perfil (`users/profile`) | o e-mail, só o admin edita |
+
+Os `${VAR}` do arquivo viram os valores que o compose entrega ao Keycloak, que vêm do
+`/opt/creed/.env`. O script para antes de pedir a senha se algum deles estiver vazio,
+se a `FRONTEND_URL` não for `https://...` sem barra no fim, ou se faltar no arquivo
+um dos blocos da tabela.
+
+**O `realm-creed.json` do clone tem que ser o da versão do back que está no ar**, a
+que tem a CREED-23.8. O clone fica na branch em que foi feito, por padrão a `dev`, e a
+imagem do back sai da `main` ([Back e deploy](#back-e-deploy)): o `pull` sozinho não
+garante que os dois batem. Arquivo de antes da CREED-23.8, o script recusa; arquivo
+mais novo que o back no ar, ele aplica sem perceber. A conferência é humana:
+
+```bash
+# o último commit que mexeu no arquivo do clone
+git -C /opt/creed/creed-backend log -1 --format='%h %ad %s' -- docker/keycloak/realm-creed.json
+# sem saída = o mesmo arquivo da versão no ar (grep BACK_TAG /opt/creed/.env)
+git -C /opt/creed/creed-backend diff --stat <BACK_TAG> -- docker/keycloak/realm-creed.json
+```
+
+Na EC2, como `ec2-user`, com o `.env` preenchido, o `jq` 1.6 ou mais novo instalado
+(`sudo dnf install -y jq`, uma vez) e o seu admin do realm `master`
+([Console de admin](#console-de-admin-do-keycloak)):
+
+```bash
+git -C /opt/creed/creed-backend pull       # e as duas conferências acima
+cd /opt/creed/creed-infrastructure/ec2
+git pull
+docker compose up -d                       # back e Keycloak recebem as variáveis
+docker compose logs -f keycloak            # o Keycloak reinicia: espere o "started" (1–3 min) e saia com Ctrl+C
+jq --version                               # jq-1.6 ou mais novo
+docker compose config --format json | jq -r '.services.caddy.environment.N8N_BASIC_AUTH_HASH[0:3]'
+./realm/aplicar-ajustes.sh <seu admin>     # a senha dele é pedida no terminal
+```
+
+A penúltima linha tem que mostrar `$$2`. O script desfaz o `$$` com que o `docker
+compose config` escreve um `$` literal, e o hash do N8N, que começa com `$2`, mostra se
+o compose desta máquina escreve assim. Mostrou outra coisa? Não rode o script.
+
+O script termina mostrando o realm como ficou, com a senha do SMTP mascarada. Para
+conferir à mão, peça `--fields 'smtpServer(*),defaultLocale,passwordPolicy'`: sem o
+`(*)`, o `kcadm get` mostra o `smtpServer` vazio, mesmo preenchido. Depois,
+pelo túnel do console, rode o *Test connection* na aba *Email* do realm `creed`.
+Rodar de novo aplica os mesmos valores: não muda nada nem falha.
+
+O login fica salvo dentro do container do Keycloak, em `~/.keycloak/kcadm.config`,
+com o token do seu admin do `master`, até o container ser recriado: enquanto a sessão
+não expira, quem entra no container usa o `kcadm.sh` como você.
+
+**Quando rodar:** depois de mudar qualquer `SMTP_*` ou a `FRONTEND_URL` no `.env`, e
+depois de um release que mude um desses blocos no `realm-creed.json`. Bloco que não
+está na tabela continua sem caminho automático.
+
 ## Conta na plataforma (enquanto não há cadastro pelo site)
 
 O back ainda não cria usuário no Keycloak (o `POST /users` recebe um `keycloak_id`
@@ -231,7 +326,9 @@ FROM l;
 - **Versão do N8N é fixa** (`n8nio/n8n:2.43.4`) e igual à do compose local. Atualizar
   é trocar nos dois lugares, de propósito, lendo o que mudou.
 - **Mudar o `realm-creed.json` não muda o realm em produção.** O `--import-realm` só
-  importa se o realm ainda não existe. Como aplicar mudança depois disso é pendência.
+  importa se o realm ainda não existe. Os blocos que o `aplicar-ajustes.sh` cobre
+  chegam por ele ([Ajustar o realm](#ajustar-o-realm-depois-da-primeira-subida)); o
+  resto, à mão.
 - **Mudou o `Caddyfile`? Recrie o Caddy:** `docker compose up -d --force-recreate caddy`.
   O arquivo entra no container montado, e o `git pull` troca o arquivo em vez de
   editá-lo — o container segue lendo o antigo, e um `up -d` comum não recria nada,
@@ -251,7 +348,11 @@ FROM l;
       *port forwarding* do Session Manager. Fecha só depois que funcionar para quem usa.
 - [ ] **Branch `main` no Amplify** — quando houver release, com as mesmas variáveis
       e a mesma reescrita da `dev`.
-- [ ] **E-mail (SES) e LLM da esteira** — decisões antes de configuração: ver
-      ADR-0006 e, para o LLM, um ADR que ainda não existe.
+- [ ] **Domínio próprio** — sem ele, o link do convite sai com o IP da EC2
+      (`https://<IP>/auth/realms/creed/...`), e o e-mail sai do Gmail do projeto. Com
+      domínio, o SES volta à mesa (adendo de 2026-10-27 do ADR-0006), e a troca é só
+      de valores: as `SMTP_*` no `.env` e o `aplicar-ajustes.sh`.
+- [ ] **LLM da esteira** — decisão antes de configuração: um ADR que ainda não
+      existe.
 - [ ] **Limpeza no fim do semestre** — snapshots, volumes e o Elastic IP, que é
       cobrado quando fica desassociado.

@@ -65,9 +65,24 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME:
       KC_BOOTSTRAP_ADMIN_PASSWORD:
 
-      # Placeholders do realm-creed.json (README do creed-backend).
+      # Placeholders do realm-creed.json (README do creed-backend). O import só os
+      # lê quando o realm nasce. No realm que já existe, quem aplica estes valores
+      # é o realm/aplicar-ajustes.sh, que os lê daqui (README, "Ajustar o realm").
       CREED_BACKEND_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
       CREED_REALM_SSL_REQUIRED: external
+      # SMTP do Gmail do projeto (adendo do ADR-0006). auth, starttls e ssl são
+      # fixos: na 587, o Gmail só aceita login depois do STARTTLS.
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_FROM: ${SMTP_FROM}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_AUTH: "true"
+      SMTP_STARTTLS: "true"
+      SMTP_SSL: "false"
+      # Redirect aceito pelo client creed-backend: o link "voltar" do convite
+      # leva ao front (P-051).
+      CREED_FRONTEND_URL: ${FRONTEND_URL}
     # Só na própria máquina, para o túnel do console. A internet chega pelo Caddy.
     ports:
       - "127.0.0.1:8080:8080"
@@ -151,6 +166,14 @@ services:
       # Domínio do front no Amplify, quando existir. Vazio = nenhum navegador de
       # outro endereço consegue chamar a API.
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      # O back monta <FRONTEND_URL>/login no convite, como destino do link
+      # "voltar" (P-051). Vazio desliga o link.
+      FRONTEND_URL: ${FRONTEND_URL}
+      # Validade do link do convite. Sem valor de propósito, como o
+      # KC_BOOTSTRAP_ADMIN_* do Keycloak: fora do .env vale o padrão do back
+      # (72 h, P-049). Com `${...}`, chegaria vazia, e o back não sobe com um
+      # número vazio.
+      KEYCLOAK_INVITE_LIFESPAN_SECONDS:
       # A integração com o N8N ainda não existe no back: N8N_WEBHOOK_URL
       # (http://n8n:5678/webhook/...) e N8N_CALLBACK_SECRET entram com ela.
     # Sem porta publicada: a internet chega pelo Caddy, em /api.
