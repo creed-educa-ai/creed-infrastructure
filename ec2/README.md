@@ -8,13 +8,15 @@ compose` só. O banco é o RDS.
 | `https://<IP>/auth/admin*` | **404** — console só por túnel |
 | `https://<IP>/auth/realms/master*` | **404** — o login dos admins do Keycloak também só por túnel |
 | `https://<IP>/auth/*` | Keycloak (páginas do realm, link do convite) |
+| `https://<IP>/api/v1/insights/callback*` | **404** — a volta da esteira de insights só chega pela rede interna |
 | `https://<IP>/api/*` | back (FastAPI) |
 | `https://<IP>:5679/mcp-server/*`, `/mcp-oauth/*`, `/.well-known/oauth-*` | servidor MCP do N8N, **sem** a senha compartilhada — protegido pelo token do N8N |
 | `https://<IP>:5679` | editor do N8N, atrás de senha compartilhada + login do N8N |
 | qualquer outro | `CREED ok` |
 
 O back fala com o Keycloak e com o N8N pela rede interna do compose — nada disso passa
-pelos endereços acima.
+pelos endereços acima. O `insight-worker` também roda neste compose, ao lado do back, e
+não tem endereço: ninguém o chama, é ele que chama o N8N.
 
 ## Layout na instância
 
@@ -81,19 +83,21 @@ O [`deploy.sh`](deploy.sh), na ordem — e ela importa (princípio inegociável 
 
 1. baixa a imagem do commit;
 2. roda `alembic upgrade head` num **container descartável** dessa imagem;
-3. só se a migration passar, recria o container do back;
-4. espera o `/health` responder e **só então** grava o commit em `BACK_TAG`, no `.env`.
+3. só se a migration passar, recria o container do back **e o do `insight-worker`**
+   (a mesma imagem, outro comando);
+4. espera o `/health` do back responder e **só então** grava o commit em `BACK_TAG`, no
+   `.env`. O worker não tem `/health`: o sinal dele está em "Esteira de insights".
 
-Migration falhou → o script para no passo 2, e o back antigo segue no ar com o banco
-como estava. Back não respondeu → o script mostra o log e para, **sem voltar sozinho
-à versão anterior**: a migration já rodou, e a imagem antiga pode não entender o
-banco novo. Quem decide é uma pessoa.
+Migration falhou → o script para no passo 2, e o back e o worker antigos seguem no ar
+com o banco como estava. Back não respondeu → o script mostra o log e para, **sem
+voltar sozinho à versão anterior**: a migration já rodou, e a imagem antiga pode não
+entender o banco novo. Quem decide é uma pessoa.
 
 **Um deploy por vez.** O script trava o `/opt/creed/deploy.lock` (`flock`) antes de
 tudo: um segundo deploy, do workflow ou à mão, sai na hora com "outro deploy em
 andamento", em vez de rodar uma segunda migration junto com a primeira.
 
-**Sem `BACK_TAG` no `.env`, o back não sobe** — de propósito. A imagem reserva do
+**Sem `BACK_TAG` no `.env`, o back e o worker não sobem** — de propósito. A imagem reserva do
 compose é a tag `rode-o-deploy-sh`, que não existe: o erro de pull já diz o que
 fazer. A `:main` não serve de reserva porque muda antes de a migration rodar.
 
@@ -109,6 +113,117 @@ O pacote da imagem no GHCR precisa estar **público**, para a EC2 baixar sem sen
 
 Mudança **neste** compose (serviço novo, variável nova) não chega com o deploy do
 back: é `git pull` neste clone e `docker compose up -d`, à mão, com alguém olhando.
+
+## Esteira de insights
+
+A cada resposta enviada, o back grava um pedido de insight. O `insight-worker` (a mesma
+imagem do back, com o comando `python -m app.workers.insights`) entrega o pedido ao N8N,
+e o N8N devolve o texto em `/api/v1/insights/callback` (ADR-0010). Cada sentido tem a
+sua credencial:
+
+```
+ida:    insight-worker ──▶ http://n8n:5678/webhook/creed/insights/v1   com o N8N_WEBHOOK_TOKEN
+volta:  n8n ──▶ http://back:8000/api/v1/insights/callback              assinada com o N8N_CALLBACK_SECRET
+```
+
+As duas pontas são a rede interna do compose. O Caddy responde **404** ao callback vindo
+de fora, e o N8N não passa por ele. O serviço `n8n` deste compose não muda por causa da
+esteira.
+
+### Variáveis
+
+| Variável | Quem lê | Onde se define | Padrão, ou sem valor |
+|---|---|---|---|
+| `N8N_WEBHOOK_TOKEN` | worker | `.env` | vazio: o worker fica parado e não toca em nenhum pedido |
+| `N8N_CALLBACK_SECRET` | back | `.env` | vazio: a rota de volta responde 401 a tudo |
+| `N8N_WEBHOOK_URL` | worker | fixa no compose | `http://n8n:5678/webhook/creed/insights/v1` |
+| `INSIGHT_MAX_IN_FLIGHT` | worker | `.env`, opcional | 5 — pedidos entregues ao N8N e ainda sem volta; é o único regulador contra a cota do Bedrock, que ainda não se conhece |
+| `INSIGHT_MAX_ATTEMPTS` | worker **e** back | `.env`, opcional | 5 — uma linha só no `.env` vale para os dois, como deve: o callback também confere o limite |
+| `INSIGHT_WORKER_INTERVAL_SECONDS` | worker | `.env`, opcional | 3 |
+| `INSIGHT_WORKER_BATCH_SIZE` | worker | `.env`, opcional | 5 |
+| `INSIGHT_DISPATCH_TIMEOUT_SECONDS` | worker | `.env`, opcional | 600 — passado esse tempo sem volta, o pedido é devolvido à fila |
+
+Os padrões são os do `config.py` do creed-backend, que é a fonte (conferidos em
+2026-11-15). Apagou uma `INSIGHT_*` do `.env`? Volta ao padrão. O token e o segredo
+são **dois valores diferentes**, um por sentido: nenhum substitui o outro.
+
+### Passos humanos
+
+A IA não executa nenhum deles: são comandos na EC2, no Parameter Store e no editor do N8N.
+
+1. **Gere o segredo da volta**, sem passar pelo histórico do terminal, e leia o valor
+   para os passos 3 e 4:
+
+   ```bash
+   echo "N8N_CALLBACK_SECRET=$(openssl rand -hex 32)" >> /opt/creed/.env
+   grep N8N_CALLBACK_SECRET /opt/creed/.env
+   ```
+
+2. **Gere o token da ida, mas deixe-o comentado no `.env`.** Ele é o interruptor da
+   esteira:
+
+   ```bash
+   echo "#N8N_WEBHOOK_TOKEN=$(openssl rand -hex 32)" >> /opt/creed/.env
+   grep N8N_WEBHOOK_TOKEN /opt/creed/.env
+   ```
+
+   Sem o token, o worker avisa "esteira desligada" no log ao subir e não mexe em
+   nenhum pedido: os `pending` esperam, sem gastar tentativa. É o estado certo até o
+   workflow existir e estar ativo no N8N. Com o token no `.env` e o workflow ausente, o
+   webhook responde 404, os pedidos gastam as 5 tentativas e viram `failed` — e não há
+   "tentar de novo" (P-044).
+3. **Parameter Store:** os dois valores em `/creed/prod/N8N_CALLBACK_SECRET` e
+   `/creed/prod/N8N_WEBHOOK_TOKEN` (`SecureString`), como todo segredo novo (ver
+   "Primeira vez").
+4. **Credenciais do N8N** (editor, `https://<IP>:5679`): os **mesmos valores**, criados
+   junto com o workflow (subtarefa 806). Nunca como literal num nó.
+   - o token da ida vai numa credencial **Header Auth** do webhook, com o nome
+     `Authorization` e o valor `Bearer <token>`. O back manda o prefixo `Bearer `, e o
+     valor tem que ser igual;
+   - o segredo da volta vai na credencial do nó que assina o callback.
+5. **Suba o worker e recrie o Caddy**, depois do deploy do back com as subtarefas 804 e
+   805: o `BACK_TAG` do `.env` precisa ser de um commit que traz o worker. Numa imagem
+   mais antiga o módulo não existe, e o container reinicia em loop.
+
+   ```bash
+   cd /opt/creed/creed-infrastructure && git pull
+   cd ec2
+   docker compose up -d                          # cria o worker e recria o back, com as variáveis novas
+   docker compose up -d --force-recreate caddy   # o Caddyfile mudou (ver "Cuidados")
+   ```
+
+6. **Ligue a esteira**, só com o workflow **ativo** no N8N: descomente o token e
+   recrie o worker. Para desligar de novo, comente a linha e rode o mesmo `up`.
+
+   ```bash
+   sed -i 's/^#N8N_WEBHOOK_TOKEN=/N8N_WEBHOOK_TOKEN=/' /opt/creed/.env
+   cd /opt/creed/creed-infrastructure/ec2
+   docker compose up -d insight-worker
+   ```
+
+7. **Confira.** Na EC2 e, o `curl`, de fora dela:
+
+   ```bash
+   docker compose ps insight-worker                          # Up
+   docker compose logs insight-worker --tail 20
+   curl -i -X POST https://<IP>/api/v1/insights/callback     # 404, sem corpo
+   ```
+
+   Um **401** no `curl` quer dizer que o Caddy ainda lê o `Caddyfile` antigo: recrie-o
+   (ver "Cuidados").
+
+### Como saber se está bem
+
+O worker não tem `/health`. O sinal, como no ADR-0010, é o log e os pedidos que
+envelhecem em `pending`. Pelo DBeaver, com o túnel descrito em "Conta na plataforma":
+
+```sql
+SELECT status, count(*), min(created_at) AS mais_antigo
+FROM insights GROUP BY status;
+```
+
+Com a esteira **ligada**, um `PENDING` de horas atrás quer dizer que o worker ou o N8N
+não está entregando: comece por `docker compose logs insight-worker`.
 
 ## Editor do N8N
 
