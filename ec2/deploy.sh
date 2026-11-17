@@ -8,8 +8,8 @@
 # deste clone e do grupo docker). À mão, de dentro da EC2, funciona igual.
 #
 # A ordem é o princípio inegociável #2: a migration roda num container descartável
-# ANTES de recriar o back. Se ela falhar, o script para aqui e o back antigo segue
-# no ar, com o banco como estava.
+# ANTES de recriar o back e o worker de insights. Se ela falhar, o script para aqui
+# e os dois antigos seguem no ar, com o banco como estava.
 #
 # Este script não faz `git pull` do creed-infrastructure: mudança no compose de
 # produção é aplicada à mão, com alguém olhando (ver README).
@@ -30,15 +30,18 @@ flock -n 9 || { echo "!!! outro deploy em andamento ($LOCK_FILE)" >&2; exit 1; }
 # final, quando ela já estiver de pé.
 export BACK_TAG="$COMMIT"
 
+# O worker de insights usa a mesma imagem do back: este pull serve aos dois.
 echo "==> 1/4 baixando a imagem $COMMIT"
 docker compose pull back
 
 echo "==> 2/4 migration (container descartável da imagem nova)"
 docker compose run --rm --no-deps back alembic upgrade head
 
-echo "==> 3/4 recriando o back"
-docker compose up -d --no-deps back
+echo "==> 3/4 recriando o back e o worker de insights"
+docker compose up -d --no-deps back insight-worker
 
+# Só o back tem /health. O worker não tem porta: o sinal dele é o log e os pedidos
+# `pending` que envelhecem (ADR-0010), como diz o README.
 echo "==> 4/4 esperando o back responder"
 for _ in $(seq 30); do
   if docker compose exec -T back python -c \
