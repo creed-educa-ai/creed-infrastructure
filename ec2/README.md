@@ -118,8 +118,8 @@ back: é `git pull` neste clone e `docker compose up -d`, à mão, com alguém o
 
 A cada resposta enviada, o back grava um pedido de insight. O `insight-worker` (a mesma
 imagem do back, com o comando `python -m app.workers.insights`) entrega o pedido ao N8N,
-e o N8N devolve o texto em `/api/v1/insights/callback` (ADR-0010). Cada sentido tem a
-sua credencial:
+e o N8N devolve o texto em `/api/v1/insights/callback` (ADR-0010). Cada sentido tem o
+seu segredo:
 
 ```
 ida:    insight-worker ──▶ http://n8n:5678/webhook/creed/insights/v1   com o N8N_WEBHOOK_TOKEN
@@ -151,21 +151,35 @@ são **dois valores diferentes**, um por sentido: nenhum substitui o outro.
 
 A IA não executa nenhum deles: são comandos na EC2, no Parameter Store e no editor do N8N.
 
-1. **Gere o segredo da volta**, sem passar pelo histórico do terminal, e leia o valor
-   para os passos 3 e 4:
+Os dois valores têm que ser **iguais** no `.env` e no N8N: um token diferente faz o
+webhook responder 401 à ida, e um segredo diferente faz o back responder 401 à volta.
+Quem faz primeiro gera, e o outro lado copia. Os workflows da subtarefa 806 já estão
+montados no N8N com os dois valores: copie-os de lá (passo 4) em vez de gerar outros.
+
+1. **Ponha o segredo da volta no `.env`**, sem passar pelo histórico do terminal. Com o
+   N8N já montado, cole o `valor` da linha `N8N_CALLBACK_SECRET` da data table
+   `segredos-esteira`. O `read -rs` lê sem mostrar na tela:
 
    ```bash
-   echo "N8N_CALLBACK_SECRET=$(openssl rand -hex 32)" >> /opt/creed/.env
-   grep N8N_CALLBACK_SECRET /opt/creed/.env
+   read -rs SEGREDO && echo "N8N_CALLBACK_SECRET=$SEGREDO" >> /opt/creed/.env && unset SEGREDO
+   grep -c '^N8N_CALLBACK_SECRET=.\+' /opt/creed/.env   # 1
    ```
 
-2. **Gere o token da ida, mas deixe-o comentado no `.env`.** Ele é o interruptor da
-   esteira:
+   Sem o N8N montado, gere com
+   `echo "N8N_CALLBACK_SECRET=$(openssl rand -hex 32)" >> /opt/creed/.env` e leve o valor
+   para o N8N no passo 4.
+
+2. **Ponha o token da ida no `.env`, mas comentado.** Ele é o interruptor da esteira.
+   Com o N8N já montado, cole o token da credencial Header Auth do webhook, **sem** o
+   `Bearer ` do começo:
 
    ```bash
-   echo "#N8N_WEBHOOK_TOKEN=$(openssl rand -hex 32)" >> /opt/creed/.env
-   grep N8N_WEBHOOK_TOKEN /opt/creed/.env
+   read -rs TOKEN && echo "#N8N_WEBHOOK_TOKEN=$TOKEN" >> /opt/creed/.env && unset TOKEN
+   grep -c '^#N8N_WEBHOOK_TOKEN=.\+' /opt/creed/.env    # 1
    ```
+
+   Sem o N8N montado, gere com
+   `echo "#N8N_WEBHOOK_TOKEN=$(openssl rand -hex 32)" >> /opt/creed/.env`.
 
    Sem o token, o worker avisa "esteira desligada" no log ao subir e não mexe em
    nenhum pedido: os `pending` esperam, sem gastar tentativa. É o estado certo até o
@@ -175,12 +189,17 @@ A IA não executa nenhum deles: são comandos na EC2, no Parameter Store e no ed
 3. **Parameter Store:** os dois valores em `/creed/prod/N8N_CALLBACK_SECRET` e
    `/creed/prod/N8N_WEBHOOK_TOKEN` (`SecureString`), como todo segredo novo (ver
    "Primeira vez").
-4. **Credenciais do N8N** (editor, `https://<IP>:5679`): os **mesmos valores**, criados
-   junto com o workflow (subtarefa 806). Nunca como literal num nó.
-   - o token da ida vai numa credencial **Header Auth** do webhook, com o nome
-     `Authorization` e o valor `Bearer <token>`. O back manda o prefixo `Bearer `, e o
-     valor tem que ser igual;
-   - o segredo da volta vai na credencial do nó que assina o callback.
+4. **No N8N** (editor, `https://<IP>:5679`, projeto "Creed Educa"): os **mesmos
+   valores**, que a subtarefa 806 já deixou lá. Nunca como literal num nó.
+   - o token da ida fica na credencial **Header Auth** do nó "Recebe pedido do back",
+     no workflow `insight-v1 entrada`, com o nome `Authorization` e o valor
+     `Bearer <token>`. O back manda o prefixo `Bearer `, e o valor tem que ser igual;
+   - o segredo da volta fica na data table **`segredos-esteira`**, na linha
+     `nome = N8N_CALLBACK_SECRET`, coluna `valor`. Não é uma credencial porque o nó que
+     assina (Crypto) recebe o segredo como texto, e uma expressão não lê o valor de uma
+     credencial. Por isso o workflow `insight-v1 volta` não salva dados de execução: a
+     saída do nó que lê a tabela tem o segredo. Detalhes em
+     `creed-backend/docker/n8n/README.md`.
 5. **Suba o worker e recrie o Caddy**, depois do deploy do back com as subtarefas 804 e
    805: o `BACK_TAG` do `.env` precisa ser de um commit que traz o worker. Numa imagem
    mais antiga o módulo não existe, e o container reinicia em loop.
