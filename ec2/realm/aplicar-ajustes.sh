@@ -5,7 +5,7 @@
 #
 # O compose sobe o Keycloak com `start --import-realm`, que só importa um realm que
 # ainda não existe. O realm de produção nasceu antes do SMTP, do idioma, da política
-# de senha, do redirect e do perfil, e mudar o arquivo não chega a ele. O
+# de senha, do redirect, do perfil e do tema, e mudar o arquivo não chega a ele. O
 # `kc.sh import --override` resolveria, mas apaga e recria o realm, com os usuários.
 #
 # Na ordem:
@@ -46,7 +46,7 @@ FALTANDO=$(jq -r '
   [.clients[]? | select(.clientId == "creed-backend")][0] as $client
   | {
       internationalizationEnabled, supportedLocales, defaultLocale, passwordPolicy,
-      smtpServer,
+      smtpServer, loginTheme, emailTheme,
       "client creed-backend": $client,
       "redirectUris do client creed-backend": $client.redirectUris,
       "webOrigins do client creed-backend": $client.webOrigins,
@@ -101,7 +101,7 @@ AJUSTES=$(printf '%s' "$KEYCLOAK_ENV" | jq --slurpfile realm "$REALM_FILE" '
   $realm[0]
   | {
       atributos: ({internationalizationEnabled, supportedLocales, defaultLocale,
-                   passwordPolicy, smtpServer} | trocar_variaveis),
+                   passwordPolicy, smtpServer, loginTheme, emailTheme} | trocar_variaveis),
       redirect: (.clients[] | select(.clientId == "creed-backend")
                  | {redirectUris, webOrigins} | trocar_variaveis),
       perfil: .components["org.keycloak.userprofile.UserProfileProvider"][0]
@@ -127,7 +127,7 @@ printf '%s' "$AJUSTES" | jq -r '.perfil' | kcadm update users/profile -r creed -
 echo "==> 4/4 como ficou (a senha do SMTP aparece mascarada)"
 # Sem o (*), o --fields mostra o smtpServer vazio, mesmo preenchido.
 kcadm get realms/creed \
-  --fields 'smtpServer(*),internationalizationEnabled,supportedLocales,defaultLocale,passwordPolicy'
+  --fields 'smtpServer(*),internationalizationEnabled,supportedLocales,defaultLocale,passwordPolicy,loginTheme,emailTheme'
 kcadm get "clients/$CLIENT_ID" -r creed --fields clientId,redirectUris,webOrigins
 kcadm get users/profile -r creed | jq '.attributes[] | select(.name == "email") | {name, permissions}'
 echo "==> pronto. Confira o Test connection na aba Email do realm creed (README)."
