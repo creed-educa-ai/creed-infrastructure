@@ -364,6 +364,7 @@ reimportar, estes blocos do arquivo:
 | `smtpServer` | o SMTP do Gmail, com os valores do `.env` |
 | `redirectUris` e `webOrigins` do client `creed-backend` | o link "voltar" do convite, para a `FRONTEND_URL` |
 | perfil (`users/profile`) | o e-mail, só o admin edita |
+| `loginTheme` e `emailTheme` | as páginas de definir a senha e o e-mail do convite com a cara do front ([Tema](#tema-das-páginas-e-do-e-mail-do-keycloak)) |
 
 Os `${VAR}` do arquivo viram os valores que o compose entrega ao Keycloak, que vêm do
 `/opt/creed/.env`. O script para antes de pedir a senha se algum deles estiver vazio,
@@ -415,6 +416,28 @@ não expira, quem entra no container usa o `kcadm.sh` como você.
 **Quando rodar:** depois de mudar qualquer `SMTP_*` ou a `FRONTEND_URL` no `.env`, e
 depois de um release que mude um desses blocos no `realm-creed.json`. Bloco que não
 está na tabela continua sem caminho automático.
+
+### Tema das páginas e do e-mail do Keycloak
+
+O e-mail do convite e da redefinição de senha sai do Keycloak, e o link dele abre
+páginas do próprio Keycloak. O tema `creed` deixa os dois com a cara da tela de login
+do front. Ele mora no `creed-backend`, em `docker/keycloak/themes/creed` (README de
+lá), e chega aqui de dois jeitos:
+
+- **a pasta**, montada no container a partir do clone do `creed-backend`, pelo
+  `docker-compose.yml` desta pasta;
+- **os nomes**, `loginTheme` e `emailTheme` no realm, pelo `aplicar-ajustes.sh`
+  (tabela acima). Sem eles, a pasta está lá e o realm continua no tema padrão.
+
+O logo do e-mail é uma imagem servida pelo próprio Keycloak, no endereço público
+(`https://<IP>/auth/resources/...`), que passa pelo Caddy como as páginas do realm.
+
+A primeira vez segue o passo a passo acima, na ordem: o `pull` do clone traz a pasta,
+o `up -d` recria o Keycloak com ela montada, e o script liga o tema.
+
+**O Keycloak guarda o tema em cache em produção.** Depois de um `pull` do clone que
+mude só a pasta do tema, o realm não muda e o script não ajuda: reinicie o Keycloak
+com `docker compose restart keycloak` e espere o "started" no log (1–3 min).
 
 ## Conta na plataforma (enquanto não há cadastro pelo site)
 

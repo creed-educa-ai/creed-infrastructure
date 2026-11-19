@@ -88,6 +88,11 @@ services:
       - "127.0.0.1:8080:8080"
     volumes:
       - ../../creed-backend/docker/keycloak/realm-creed.json:/opt/keycloak/data/import/realm-creed.json:ro
+      # Tema das páginas que a pessoa vê no Keycloak (definir a senha) e do e-mail
+      # do convite, do mesmo clone. Em modo produção o Keycloak guarda o tema em
+      # cache: depois de um `git pull` que mude a pasta, `docker compose restart
+      # keycloak` (README).
+      - ../../creed-backend/docker/keycloak/themes/creed:/opt/keycloak/themes/creed:ro
 
   n8n:
     # Versão fixa, a mesma do docker-compose local do creed-backend. `latest`
