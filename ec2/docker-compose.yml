@@ -1,5 +1,5 @@
-# Produção na EC2 (ADR-0007): Caddy na frente; back, Keycloak e N8N atrás. O banco
-# é o RDS — nenhum Postgres sobe aqui.
+# Produção na EC2 (ADR-0007): Caddy na frente; back, Keycloak e N8N atrás, e o
+# worker de insights ao lado do back. O banco é o RDS — nenhum Postgres sobe aqui.
 #
 # Na EC2 este arquivo roda de /opt/creed/creed-infrastructure/ec2, com o
 # creed-backend clonado ao lado (/opt/creed/creed-backend) e o .env desta pasta
@@ -174,9 +174,67 @@ services:
       # (72 h, P-049). Com `${...}`, chegaria vazia, e o back não sobe com um
       # número vazio.
       KEYCLOAK_INVITE_LIFESPAN_SECONDS:
-      # A integração com o N8N ainda não existe no back: N8N_WEBHOOK_URL
-      # (http://n8n:5678/webhook/...) e N8N_CALLBACK_SECRET entram com ela.
+
+      # Esteira de insights. O N8N devolve o texto em /api/v1/insights/callback, pela
+      # rede interna: o Caddy responde 404 a esse caminho vindo de fora. O segredo
+      # confere a assinatura da volta. Vazio, a rota recusa tudo com 401. O token
+      # da ida NÃO vem para cá: quem chama o N8N é o worker, e quem assina é o N8N.
+      # O `:-` só cala o aviso "variable is not set" do compose: texto vazio é válido
+      # para o back, como no CORS_ORIGINS.
+      N8N_CALLBACK_SECRET: ${N8N_CALLBACK_SECRET:-}
+      # Sem valor de propósito, como o KC_BOOTSTRAP_ADMIN_* do Keycloak: o compose
+      # repassa se o .env tiver e omite se não tiver, e vale o padrão do back. Com
+      # `${...:-}` chegaria vazia, e o back não sobe com um número vazio. Tem que
+      # ser o mesmo valor do worker: o callback também confere o limite de tentativas.
+      INSIGHT_MAX_ATTEMPTS:
     # Sem porta publicada: a internet chega pelo Caddy, em /api.
+
+  insight-worker:
+    # Mesma imagem e mesma tag do back, com outro comando (ADR-0010). O deploy.sh
+    # recria os dois juntos, depois da migration, então os dois rodam sempre o mesmo
+    # commit. Mudou a imagem de um? Mude a do outro. O comentário do `back` explica
+    # por que a tag reserva não existe.
+    image: ghcr.io/creed-educa-ai/creed-backend:${BACK_TAG:-rode-o-deploy-sh}
+    command: python -m app.workers.insights
+    restart: unless-stopped
+    # Sem servidor web: só o loop, o SQLAlchemy e o httpx. Ainda não medido em
+    # produção: se `docker stats` chegar perto do teto, ou o container reiniciar
+    # sozinho (OOM), suba este valor.
+    mem_limit: 192m
+    # O SIGTERM deixa o ciclo em curso terminar. Com o N8N fora, um ciclo leva até
+    # INSIGHT_WORKER_BATCH_SIZE × N8N_TIMEOUT_SECONDS (5 × 10 s), e com os 10 s
+    # padrão do Docker o SIGKILL chegaria no meio, deixando o pedido `dispatched`
+    # até a varredura devolvê-lo à fila. É o mesmo valor do compose local do
+    # creed-backend: mudou um dos dois, reveja este.
+    stop_grace_period: 1m
+    environment:
+      ENVIRONMENT: production
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # O worker não usa o Keycloak, mas a config do back exige este valor para
+      # subir: sem ele o container cai no boot e reinicia em loop.
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+
+      # O N8N pela rede interna, o mesmo endereço que o editor mostra em WEBHOOK_URL.
+      # O token vai no `Authorization: Bearer` da ida. Vazio, o worker avisa
+      # "esteira desligada" no log e não mexe em nenhum pedido. Comentado no .env é o
+      # estado normal até o workflow existir (README): o `:-` evita o aviso de
+      # variável ausente a cada comando do compose, inclusive no log do deploy.
+      N8N_WEBHOOK_URL: http://n8n:5678/webhook/creed/insights/v1
+      N8N_WEBHOOK_TOKEN: ${N8N_WEBHOOK_TOKEN:-}
+      # O ritmo. Sem valor, mesmo motivo do INSIGHT_MAX_ATTEMPTS do back: vale o
+      # padrão do back, e o .env muda um deles. O INSIGHT_MAX_IN_FLIGHT é o único
+      # regulador contra a cota do Bedrock, que ainda não se conhece.
+      INSIGHT_WORKER_INTERVAL_SECONDS:
+      INSIGHT_WORKER_BATCH_SIZE:
+      INSIGHT_MAX_IN_FLIGHT:
+      INSIGHT_MAX_ATTEMPTS:
+      INSIGHT_DISPATCH_TIMEOUT_SECONDS:
+    # Sem porta publicada e sem nada na frente: ninguém chama o worker, é ele que
+    # chama o N8N.
 
 volumes:
   caddy_data:

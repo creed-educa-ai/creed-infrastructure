@@ -41,6 +41,14 @@
 		reverse_proxy keycloak:8080
 	}
 
+	# A volta da esteira de insights: o N8N chama o back pela rede interna
+	# (http://back:8000/api/v1/insights/callback), sem passar por aqui. De fora, só uma
+	# assinatura HMAC protegeria a rota, e ninguém de fora tem motivo para chamá-la.
+	# Vem antes do /api/* por ser caminho mais longo.
+	handle /api/v1/insights/callback* {
+		respond 404
+	}
+
 	# API do back. O caminho chega inteiro (/api/v1/...), que é como o back espera.
 	handle /api/* {
 		reverse_proxy back:8000
